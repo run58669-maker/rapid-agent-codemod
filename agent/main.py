@@ -125,7 +125,7 @@ def run(repo_root: str, dry_run: bool = False) -> None:
         sys.exit(2)
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
-        model_name="gemini-2.5-pro",
+        model_name="gemini-2.5-flash",
         system_instruction=SYSTEM_PROMPT,
         tools=[{"function_declarations": TOOLS}],
     )
