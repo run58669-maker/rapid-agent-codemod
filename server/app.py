@@ -81,19 +81,19 @@ def api_status():
 
 @app.post("/api/run")
 def api_run():
-    try:
-        _ensure_demo_repo()
-        # Reset to clean main before agent run (idempotent runs)
-        subprocess.run(["git", "-C", DEMO_REPO_PATH, "checkout", "main"], check=True)
-        subprocess.run(["git", "-C", DEMO_REPO_PATH, "reset", "--hard", "origin/main"], check=True)
-        # Run agent (dry-run = deterministic, no Gemini quota burn on every click)
-        # LLM mode is the default; flip via ?llm=1
-        dry = request.args.get("llm", "0") != "1"
-        run_agent(DEMO_REPO_PATH, dry_run=dry)
-        return jsonify({"ok": True, "demo_repo": DEMO_GITLAB_URL,
-                        "mode": "dry-run" if dry else "llm"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+    # Disabled in hosted demo: the deterministic flow needs disk-write access
+    # to a writable clone of the demo target (Cloud Run /tmp is fine but flaky
+    # under cold starts), and the LLM flow occasionally hits Gemini Flash's
+    # MALFORMED_FUNCTION_CALL on the function-call return. Both paths work
+    # locally — see the README's "Run it locally" section. For the hosted
+    # demo we surface the MRs already opened against the live target via
+    # /api/status, which calls the same GitLab Duo MCP server (read-only tool).
+    return jsonify({
+        "ok": False,
+        "error": "Live run disabled in hosted demo — see /api/status for the live MRs the agent has opened.",
+        "live_mrs_endpoint": "/api/status",
+        "see_local": "https://github.com/run58669-maker/rapid-agent-codemod#run-it-locally",
+    }), 503
 
 
 @app.get("/")
@@ -148,13 +148,30 @@ def index():
 [call] open_merge_request → <b>create_merge_request</b> via GitLab Duo MCP
        → https://gitlab.com/.../merge_requests/N</pre>
 
-<h2>Try it</h2>
-<p>Triggers a fresh agent run on the demo target
-   <a href="{DEMO_GITLAB_URL}">{DEMO_GITLAB_URL}</a>
-   and opens a new MR. Each call appends a fresh branch + MR.</p>
-<button onclick="trigger('0')">Run (deterministic)</button>
-&nbsp; <button onclick="trigger('1')">Run (Gemini LLM)</button>
-<div id="out"></div>
+<h2>See it run</h2>
+<p>Every MR on the demo target was opened by this agent via the
+   GitLab Duo MCP <code>create_merge_request</code> tool. Each one shows
+   the deterministic codemod's diff plus the LLM's reasoning section
+   for what the codemod did and did not handle.</p>
+<p style="margin-top:14px">
+  <a href="{DEMO_GITLAB_URL}/-/merge_requests" style="display:inline-block;background:#fc6d26;color:#0c1724;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:600">Browse live MRs on GitLab →</a>
+</p>
+<p style="margin-top:12px">Live MR list via this server's
+   <code>GET /api/status</code> (queries GitLab Duo MCP <code>search</code>):</p>
+<div id="out">Loading…</div>
+<script>
+fetch('/api/status').then(r => r.json()).then(d => {{
+  const items = (d.result?.structuredContent?.items || []).sort((a,b) => b.iid - a.iid);
+  document.getElementById('out').innerHTML = items.map(m =>
+    `<div style="background:#1e2a3a;padding:10px;border-radius:4px;margin-bottom:6px">
+       <b style="color:#fc6d26">!${{m.iid}}</b> ${{m.title}}<br>
+       <small style="color:#9aa0a6">${{m.source_branch}} → ${{m.target_branch}} · ${{m.created_at?.slice(0,10)}}</small>
+       &nbsp;<a href="${{m.web_url}}" style="color:#fbbc04">open ↗</a>
+     </div>`).join('') || '(no MRs)';
+}}).catch(e => {{
+  document.getElementById('out').textContent = 'status error: ' + e.message;
+}});
+</script>
 
 <h2>Code</h2>
 <ul>
