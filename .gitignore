@@ -4,6 +4,8 @@ __pycache__/
 venv/
 .env
 secrets/
+.mcp-auth/
+codemod-web3py-v7/
 *.log
 .pytest_cache/
 .mypy_cache/
