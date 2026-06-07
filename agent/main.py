@@ -21,10 +21,27 @@ from tools.detect_framework import detect_web3_version  # noqa: E402
 from tools.run_codemod import run_codemod              # noqa: E402
 from tools.gitlab_mr import open_merge_request         # noqa: E402
 
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
+import google.auth
+from google.auth.transport.requests import Request
+from openai import OpenAI
+
+GCP_PROJECT = os.environ.get("GCP_PROJECT", "project-92324467-359f-463c-bb7")
+GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "google/gemini-2.5-flash")
+
+
+def _vertex_client() -> OpenAI:
+    """Gemini on the user's GCP quota via Vertex AI's OpenAI-compatible endpoint.
+
+    Auth is ADC (gcloud login locally, or a Cloud Run service account in prod) —
+    no API key. The AI Studio key path is intentionally gone: its free quota is 0.
+    """
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(Request())
+    base = (f"https://{GCP_LOCATION}-aiplatform.googleapis.com/v1/"
+            f"projects/{GCP_PROJECT}/locations/{GCP_LOCATION}/endpoints/openapi")
+    return OpenAI(api_key=creds.token, base_url=base)
 
 
 TOOLS = [
@@ -95,9 +112,9 @@ your final answer to the user; the value is in the MR body, not in chat."""
 
 
 def run(repo_root: str, dry_run: bool = False) -> None:
-    if dry_run or genai is None:
+    if dry_run:
         # Fallback: straight-line deterministic flow, no LLM. Useful for CI and
-        # when the API key isn't set yet.
+        # when GCP credentials aren't available yet.
         det = detect_web3_version(repo_root)
         print("[detect]", json.dumps(det, indent=2))
         if not det.get("suggested_codemod"):
@@ -118,44 +135,40 @@ def run(repo_root: str, dry_run: bool = False) -> None:
         print("[mr]", json.dumps(mr, indent=2))
         return
 
-    # LLM path
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        print("ERROR: set GEMINI_API_KEY (or pass --dry-run)", file=sys.stderr)
-        sys.exit(2)
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=SYSTEM_PROMPT,
-        tools=[{"function_declarations": TOOLS}],
-    )
-    chat = model.start_chat()
-    prompt = f"Repo to migrate: {repo_root}"
-    resp = chat.send_message(prompt)
-
+    # LLM path — Gemini via Vertex AI (OpenAI-compatible), ADC auth, no API key.
+    client = _vertex_client()
+    tools = [{"type": "function", "function": t} for t in TOOLS]
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"Repo to migrate: {repo_root}"},
+    ]
     while True:
-        fc = None
-        for part in resp.candidates[0].content.parts:
-            if hasattr(part, "function_call") and part.function_call:
-                fc = part.function_call
-                break
-        if fc is None:
-            print(resp.text)
-            return
-        args = {k: v for k, v in fc.args.items()}
-        print(f"[call] {fc.name}({args})")
-        result = _dispatch(fc.name, args)
-        print(f"[result] {json.dumps(result)[:300]}")
-        resp = chat.send_message(
-            genai.protos.Content(
-                role="function",
-                parts=[genai.protos.Part(
-                    function_response=genai.protos.FunctionResponse(
-                        name=fc.name, response={"result": json.dumps(result)},
-                    ),
-                )],
-            )
+        resp = client.chat.completions.create(
+            model=GEMINI_MODEL, messages=messages, tools=tools, temperature=0,
         )
+        msg = resp.choices[0].message
+        if not msg.tool_calls:
+            print(msg.content or "")
+            return
+        messages.append({
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name,
+                              "arguments": tc.function.arguments}}
+                for tc in msg.tool_calls
+            ],
+        })
+        for tc in msg.tool_calls:
+            args = json.loads(tc.function.arguments or "{}")
+            print(f"[call] {tc.function.name}({args})")
+            result = _dispatch(tc.function.name, args)
+            print(f"[result] {json.dumps(result)[:300]}")
+            messages.append({
+                "role": "tool", "tool_call_id": tc.id,
+                "content": json.dumps(result),
+            })
 
 
 def main():

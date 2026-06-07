@@ -9,7 +9,7 @@ TODOs called out, no human in the loop.
 
 - **Live hosted demo**: <https://rapid-agent-codemod-945076065119.us-central1.run.app>
 - **Demo target repo** (live, gets new MRs from each agent run): <https://gitlab.com/run58669-maker/web3py-v6-sample>
-- **Demo video** (≤3 min): <https://youtu.be/DKPvUp1z7ls>
+- **Demo video** (≤3 min): <https://youtu.be/q7gc9Z_Ytn8>
 - **Sibling repo** — deterministic codemod: <https://github.com/run58669-maker/web3py-v6-to-v7-codemod>
 
 ## Why
@@ -56,7 +56,7 @@ that surfaces the codemod's `TODO(web3py-v7)` comments to the reviewer.
 
 | Layer | What we used |
 |---|---|
-| Agent reasoning | **Gemini 2.5 Flash** via `google-generativeai` function calling |
+| Agent reasoning | **Gemini 2.5 Flash** via **Vertex AI** (OpenAI-compatible endpoint), ADC auth — no API key |
 | Hosted runtime | **Google Cloud Run** (Python 3.12 + Node 20 in one image) |
 | Image build | **Cloud Build** → **gcr.io** (Container Registry) |
 | Codemod runner | `npx codemod jssg run` on the sibling `codemod-web3py-v7` |
@@ -117,8 +117,9 @@ rapid-agent-codemod/
 git clone https://github.com/run58669-maker/rapid-agent-codemod.git
 cd rapid-agent-codemod
 pip install -r requirements.txt
-npx mcp-remote https://gitlab.com/api/v4/mcp   # one-time OAuth
-export GEMINI_API_KEY=...
+npx mcp-remote https://gitlab.com/api/v4/mcp        # one-time GitLab Duo MCP OAuth
+gcloud auth application-default login               # Gemini via your GCP / Vertex AI quota
+export GCP_PROJECT=your-gcp-project                 # defaults to the maintainer's project
 python agent/main.py --repo /path/to/a/web3py-v6/repo
 ```
 
